@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  mission-control:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./:/app
+      - ./data:/data
+    ports:
+      - "3000:3000"
+      - "3456:3456"
+    environment:
+      - NODE_ENV=production
+      - DATA_DIR=/data
+    command: node dist/index.js
+    restart: unless-stopped
+
+  # Optional: API only mode
+  api:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./:/app
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+    command: node dist/api.js
+    restart: unless-stopped
+
+  # Optional: Webhook receiver
+  webhook:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./:/app
+    ports:
+      - "3456:3456"
+    environment:
+      - NODE_ENV=production
+    command: node dist/webhook.js
+    restart: unless-stopped
