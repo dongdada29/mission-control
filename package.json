@@ -2,14 +2,22 @@
   "name": "mission-control",
   "version": "1.0.0",
   "description": "Manage 100+ AI Agent digital employees",
-  "main": "bin/missionctl.js",
-  "bin": {
-    "missionctl": "./bin/missionctl.js"
-  },
+  "main": "src/index.ts",
   "scripts": {
-    "start": "node bin/missionctl.js"
+    "start": "node dist/index.js",
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest"
   },
-  "keywords": ["ai", "agent", "openclaw", "automation"],
+  "keywords": ["ai", "agent", "openclaw", "automation", "mission-control"],
   "author": "dongdada",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "electron-log": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  }
 }
