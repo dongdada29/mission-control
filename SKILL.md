@@ -344,6 +344,8 @@ mc notify success "构建完成" "全部测试通过"
 | **coordinator** | 任务协调 | 1 |
 | **researcher** | 调研分析 | 3 |
 | **monitor** | 监控告警 | 1 |
+| **researcher** | 调研分析 | 3 |
+| **monitor** | 监控告警 | 1 |
 
 ## 规模化
 
