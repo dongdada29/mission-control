@@ -164,3 +164,8 @@ export { AgentPool, Agent, Task, DEFAULT_AGENT_CONFIGS } from './agentPool';
 export { TaskScheduler, ScheduledTask, TaskTemplate, COMMON_TEMPLATES } from './taskScheduler';
 export { AgentMemory, MemoryEntry, MemoryQuery } from './memory';
 export { NotificationSystem, Notification, NotificationChannel, notify } from './notification';
+export { Metrics, Metric, TimeSeriesPoint, COMMON_METRICS } from './metrics';
+export { WebhookServer, WebhookHandler, WebhookEvent, WEBHOOK_EVENTS } from './webhook';
+export { WorkflowEngine, Workflow, WorkflowStep, WorkflowExecution, EXAMPLE_WORKFLOWS } from './workflow';
+export { APIServer, APIServerConfig, createAPIServer } from './api';
+export { MissionControl, Workspace, WorkspaceConfig } from './index';
