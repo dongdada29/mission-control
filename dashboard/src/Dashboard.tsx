@@ -1,11 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { io, Socket } from 'socket.io-client';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, LineChart, Line, Legend
 } from 'recharts';
-import { Users, Briefcase, DollarSign, TrendingUp, Activity } from 'lucide-react';
+import { Users, Briefcase, DollarSign, TrendingUp, Activity, Bell, X } from 'lucide-react';
 
 const API_URL = 'http://localhost:3001/api';
+const WS_URL = 'http://localhost:3001';
 
 // Types
 interface Workspace {
@@ -49,6 +51,13 @@ interface CostData {
   byModel: { name: string; cost: number; tokens: number }[];
 }
 
+interface Notification {
+  id: string;
+  type: 'success' | 'warning' | 'error' | 'info';
+  message: string;
+  timestamp: number;
+}
+
 const statusColors: Record<string, string> = {
   idle: '#10b981',
   busy: '#f59e0b',
@@ -74,16 +83,107 @@ function useApi<T>(endpoint: string) {
   return { data, loading, error };
 }
 
+// Custom hook for WebSocket
+function useWebSocket() {
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+
+  useEffect(() => {
+    const newSocket = io(WS_URL, {
+      transports: ['websocket', 'polling'],
+    });
+
+    newSocket.on('connect', () => {
+      console.log('WebSocket connected');
+      setConnected(true);
+    });
+
+    newSocket.on('disconnect', () => {
+      console.log('WebSocket disconnected');
+      setConnected(false);
+    });
+
+    newSocket.on('notification', (data: Omit<Notification, 'id'>) => {
+      const notification: Notification = {
+        ...data,
+        id: `${Date.now()}-${Math.random()}`,
+      };
+      setNotifications(prev => [notification, ...prev].slice(0, 10));
+
+      // Auto-dismiss after 5 seconds
+      setTimeout(() => {
+        setNotifications(prev => prev.filter(n => n.id !== notification.id));
+      }, 5000);
+    });
+
+    setSocket(newSocket);
+
+    return () => {
+      newSocket.close();
+    };
+  }, []);
+
+  const dismissNotification = useCallback((id: string) => {
+    setNotifications(prev => prev.filter(n => n.id !== id));
+  }, []);
+
+  return { socket, connected, notifications, dismissNotification };
+}
+
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState('overview');
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [costs, setCosts] = useState<CostData | null>(null);
 
+  const { socket, connected, notifications, dismissNotification } = useWebSocket();
   const { data: stats } = useApi<Stats>('/stats');
   const { data: workspaces } = useApi<Workspace[]>('/workspaces');
-  const { data: agents } = useApi<Agent[]>('/agents');
   const { data: performance } = useApi<Performance[]>('/performance');
-  const { data: costs } = useApi<CostData>('/costs');
 
-  if (!stats || !workspaces || !agents || !performance || !costs) {
+  // Load initial agents
+  useEffect(() => {
+    fetch(`${API_URL}/agents`)
+      .then(res => res.json())
+      .then(setAgents);
+  }, []);
+
+  // Load initial costs
+  useEffect(() => {
+    fetch(`${API_URL}/costs`)
+      .then(res => res.json())
+      .then(setCosts);
+  }, []);
+
+  // WebSocket real-time updates
+  useEffect(() => {
+    if (!socket) return;
+
+    socket.on('agents:update', (data: Agent[]) => {
+      setAgents(data);
+    });
+
+    socket.on('agent:status', ({ agentId, status }: { agentId: string; status: string; agent: Agent }) => {
+      setAgents(prev => prev.map(a => a.id === agentId ? { ...a, status: status as Agent['status'] } : a));
+    });
+
+    socket.on('agent:update', (agent: Agent) => {
+      setAgents(prev => prev.map(a => a.id === agent.id ? agent : a));
+    });
+
+    socket.on('cost:update', (data: CostData) => {
+      setCosts(data);
+    });
+
+    return () => {
+      socket.off('agents:update');
+      socket.off('agent:status');
+      socket.off('agent:update');
+      socket.off('cost:update');
+    };
+  }, [socket]);
+
+  if (!stats || !workspaces || !performance || !costs) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
         <div className="text-gray-400">Loading...</div>
@@ -92,19 +192,51 @@ export default function Dashboard() {
   }
 
   const totalTasks = agents.reduce((sum, a) => sum + a.tasks, 0);
-  const avgSuccess = agents.reduce((sum, a) => sum + a.success, 0) / agents.length;
+  const avgSuccess = agents.length > 0 ? agents.reduce((sum, a) => sum + a.success, 0) / agents.length : 0;
 
   return (
     <div className="min-h-screen bg-gray-900 text-white">
       {/* Header */}
       <header className="bg-gray-800 border-b border-gray-700 px-6 py-4">
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-indigo-400">🚀 Mission Control</h1>
-          <div className="flex gap-4">
-            <span className="text-sm text-gray-400">Digital Employee Management</span>
+          <div className="flex items-center gap-4">
+            <h1 className="text-2xl font-bold text-indigo-400">🚀 Mission Control</h1>
+            <span className={`px-2 py-1 rounded-full text-xs ${connected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+              {connected ? '● Live' : '○ Disconnected'}
+            </span>
+          </div>
+          <div className="flex items-center gap-4">
+            {notifications.length > 0 && (
+              <div className="relative">
+                <Bell className="w-5 h-5 text-gray-400" />
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">
+                  {notifications.length}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </header>
+
+      {/* Notifications */}
+      <div className="fixed top-20 right-4 z-50 space-y-2 max-w-sm">
+        {notifications.map(n => (
+          <div
+            key={n.id}
+            className={`p-3 rounded-lg shadow-lg flex items-start gap-2 ${
+              n.type === 'success' ? 'bg-green-900/90 border border-green-700' :
+              n.type === 'warning' ? 'bg-yellow-900/90 border border-yellow-700' :
+              n.type === 'error' ? 'bg-red-900/90 border border-red-700' :
+              'bg-gray-800/90 border border-gray-600'
+            }`}
+          >
+            <span className="flex-1 text-sm">{n.message}</span>
+            <button onClick={() => dismissNotification(n.id)} className="text-gray-400 hover:text-white">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        ))}
+      </div>
 
       {/* Navigation */}
       <nav className="bg-gray-800 border-b border-gray-700 px-6">
@@ -129,39 +261,13 @@ export default function Dashboard() {
       <main className="p-6">
         {activeTab === 'overview' && (
           <div className="space-y-6">
-            {/* Stats Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              <StatCard
-                icon={<Users className="w-6 h-6" />}
-                label="Total Agents"
-                value={stats.totalAgents}
-                subtext={`${stats.busyAgents} busy`}
-                color="indigo"
-              />
-              <StatCard
-                icon={<Briefcase className="w-6 h-6" />}
-                label="Workspaces"
-                value={workspaces.length}
-                subtext="departments"
-                color="purple"
-              />
-              <StatCard
-                icon={<Activity className="w-6 h-6" />}
-                label="Tasks Completed"
-                value={totalTasks}
-                subtext="this week"
-                color="green"
-              />
-              <StatCard
-                icon={<TrendingUp className="w-6 h-6" />}
-                label="Success Rate"
-                value={`${(avgSuccess * 100).toFixed(1)}%`}
-                subtext="average"
-                color="yellow"
-              />
+              <StatCard icon={<Users className="w-6 h-6" />} label="Total Agents" value={stats.totalAgents} subtext={`${stats.busyAgents} busy`} color="indigo" />
+              <StatCard icon={<Briefcase className="w-6 h-6" />} label="Workspaces" value={workspaces.length} subtext="departments" color="purple" />
+              <StatCard icon={<Activity className="w-6 h-6" />} label="Tasks Completed" value={totalTasks} subtext="this week" color="green" />
+              <StatCard icon={<TrendingUp className="w-6 h-6" />} label="Success Rate" value={`${(avgSuccess * 100).toFixed(1)}%`} subtext="average" color="yellow" />
             </div>
 
-            {/* Charts */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <ChartCard title="Tasks per Day">
                 <ResponsiveContainer width="100%" height={300}>
@@ -198,20 +304,13 @@ export default function Dashboard() {
               </ChartCard>
             </div>
 
-            {/* Active Agents */}
             <div className="bg-gray-800 rounded-lg p-6">
-              <h3 className="text-lg font-semibold mb-4">Active Agents</h3>
+              <h3 className="text-lg font-semibold mb-4">Active Agents <span className="text-xs text-green-400 ml-2">● Live</span></h3>
               <div className="space-y-3">
                 {agents.map(agent => (
-                  <div
-                    key={agent.id}
-                    className="flex items-center justify-between p-3 bg-gray-700/50 rounded-lg"
-                  >
+                  <div key={agent.id} className="flex items-center justify-between p-3 bg-gray-700/50 rounded-lg transition-all duration-300">
                     <div className="flex items-center gap-3">
-                      <div
-                        className="w-2 h-2 rounded-full"
-                        style={{ backgroundColor: statusColors[agent.status] }}
-                      />
+                      <div className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: statusColors[agent.status] }} />
                       <div>
                         <p className="font-medium">{agent.name}</p>
                         <p className="text-sm text-gray-400">{agent.model}</p>
@@ -261,17 +360,11 @@ export default function Dashboard() {
               </thead>
               <tbody className="divide-y divide-gray-700">
                 {agents.map(agent => (
-                  <tr key={agent.id} className="hover:bg-gray-700/50">
+                  <tr key={agent.id} className="hover:bg-gray-700/50 transition-colors">
                     <td className="px-6 py-4">{agent.name}</td>
                     <td className="px-6 py-4 text-gray-400">{agent.model}</td>
                     <td className="px-6 py-4">
-                      <span
-                        className="px-2 py-1 rounded-full text-xs font-medium"
-                        style={{
-                          backgroundColor: `${statusColors[agent.status]}20`,
-                          color: statusColors[agent.status],
-                        }}
-                      >
+                      <span className="px-2 py-1 rounded-full text-xs font-medium" style={{ backgroundColor: `${statusColors[agent.status]}20`, color: statusColors[agent.status] }}>
                         {agent.status}
                       </span>
                     </td>
@@ -379,7 +472,6 @@ export default function Dashboard() {
   );
 }
 
-// Helper Components
 function StatCard({ icon, label, value, subtext, color }: {
   icon: React.ReactNode;
   label: string;

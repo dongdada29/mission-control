@@ -1,7 +1,17 @@
 import express from 'express';
 import cors from 'cors';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
 
 const app = express();
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+  cors: {
+    origin: ['http://localhost:5173', 'http://localhost:3000'],
+    methods: ['GET', 'POST'],
+  },
+});
+
 app.use(cors());
 app.use(express.json());
 
@@ -19,14 +29,96 @@ const agents = [
   { id: 'deepseek-1', name: 'DeepSeek Coder', model: 'deepseek-v3', status: 'busy', tasks: 25, success: 0.89, workspaceId: 'backend' },
 ];
 
+let costData = {
+  today: 16.60,
+  week: 82.30,
+  month: 312.50,
+  budgetUsed: 78,
+  byModel: [
+    { name: 'Claude', cost: 12.50, tokens: 125000 },
+    { name: 'GLM', cost: 2.30, tokens: 230000 },
+    { name: 'DeepSeek', cost: 1.80, tokens: 180000 },
+  ],
+};
+
+// WebSocket connection
+io.on('connection', (socket) => {
+  console.log(`Client connected: ${socket.id}`);
+
+  // Send initial data
+  socket.emit('agents:update', agents);
+  socket.emit('cost:update', costData);
+
+  // Handle agent status change request
+  socket.on('agent:setStatus', ({ agentId, status }) => {
+    const agent = agents.find(a => a.id === agentId);
+    if (agent) {
+      agent.status = status;
+      // Broadcast to all clients
+      io.emit('agent:status', { agentId, status, agent });
+      console.log(`Agent ${agentId} status changed to ${status}`);
+    }
+  });
+
+  // Handle task complete request
+  socket.on('task:complete', ({ agentId, success }) => {
+    const agent = agents.find(a => a.id === agentId);
+    if (agent) {
+      agent.tasks++;
+      if (success) {
+        // Update success rate (simple moving average)
+        agent.success = (agent.success * (agent.tasks - 1) + 1) / agent.tasks;
+      } else {
+        agent.success = (agent.success * (agent.tasks - 1)) / agent.tasks;
+      }
+      io.emit('agent:update', agent);
+      io.emit('notification', {
+        type: success ? 'success' : 'warning',
+        message: `Agent ${agent.name} completed a task (${success ? 'success' : 'failed'})`,
+        timestamp: Date.now(),
+      });
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`Client disconnected: ${socket.id}`);
+  });
+});
+
+// Simulate real-time events
+setInterval(() => {
+  // Randomly change agent status
+  const randomAgent = agents[Math.floor(Math.random() * agents.length)];
+  const statuses: ('idle' | 'busy' | 'offline')[] = ['idle', 'busy'];
+  const newStatus = statuses[Math.floor(Math.random() * statuses.length)];
+
+  if (randomAgent.status !== newStatus) {
+    randomAgent.status = newStatus;
+    io.emit('agent:status', {
+      agentId: randomAgent.id,
+      status: newStatus,
+      agent: randomAgent,
+    });
+  }
+}, 15000); // Every 15 seconds
+
+setInterval(() => {
+  // Update cost slightly
+  costData = {
+    ...costData,
+    today: costData.today + Math.random() * 0.1,
+    week: costData.week + Math.random() * 0.3,
+    month: costData.month + Math.random() * 0.5,
+  };
+  io.emit('cost:update', costData);
+}, 30000); // Every 30 seconds
+
 // API Routes
 
-// Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Workspaces
 app.get('/api/workspaces', (req, res) => {
   res.json(workspaces);
 });
@@ -41,10 +133,10 @@ app.post('/api/workspaces', (req, res) => {
   const { name } = req.body;
   const ws = { id: name.toLowerCase().replace(/\s+/g, '-'), name, agents: 0, tasks: 0 };
   workspaces.push(ws);
+  io.emit('workspace:created', ws);
   res.status(201).json(ws);
 });
 
-// Agents
 app.get('/api/agents', (req, res) => {
   const { workspaceId, status } = req.query;
   let filtered = agents;
@@ -76,7 +168,6 @@ app.get('/api/stats', (req, res) => {
   });
 });
 
-// Performance (mock historical data)
 app.get('/api/performance', (req, res) => {
   res.json([
     { name: 'Mon', tasks: 45, success: 42, avgTime: 3200 },
@@ -89,22 +180,11 @@ app.get('/api/performance', (req, res) => {
   ]);
 });
 
-// Cost (mock data)
 app.get('/api/costs', (req, res) => {
-  res.json({
-    today: 16.60,
-    week: 82.30,
-    month: 312.50,
-    budgetUsed: 78,
-    byModel: [
-      { name: 'Claude', cost: 12.50, tokens: 125000 },
-      { name: 'GLM', cost: 2.30, tokens: 230000 },
-      { name: 'DeepSeek', cost: 1.80, tokens: 180000 },
-    ],
-  });
+  res.json(costData);
 });
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`🚀 Mission Control API running on http://localhost:${PORT}`);
+httpServer.listen(PORT, () => {
+  console.log(`🚀 Mission Control API + WebSocket running on http://localhost:${PORT}`);
 });
