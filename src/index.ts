@@ -1,171 +1,130 @@
 /**
- * Mission Control - Core Index
- * Manage 100+ AI Agent digital employees
+ * Mission Control - Digital Employee Management System
  */
 
-import { AgentPool, Agent, DEFAULT_AGENT_CONFIGS, Task } from './agentPool';
-import { TaskScheduler, ScheduledTask, COMMON_TEMPLATES } from './taskScheduler';
+export { AgentManager } from './agent.js';
+export { WorkspaceManager, type TaskExecutor } from './workspace.js';
+export type { 
+  Task, 
+  Result, 
+  Agent, 
+  AgentStats, 
+  Workspace, 
+  AssignOptions 
+} from './types.js';
 
-export interface Workspace {
-  id: string;
-  name: string;
-  path: string;
-  agents: string[];
-  config: WorkspaceConfig;
-}
+import { AgentManager } from './agent.js';
+import { WorkspaceManager, type TaskExecutor } from './workspace.js';
+import type { Task, Result, AssignOptions } from './types.js';
 
-export interface WorkspaceConfig {
-  maxAgents: number;
-  defaultSkills: string[];
-  notifyOnFail: boolean;
-  autoScale: boolean;
-}
+/**
+ * Mission Control - 主入口
+ */
+export class MissionControl {
+  private workspaceManager: WorkspaceManager;
 
-export interface MissionConfig {
-  version: string;
-  workspaces: Map<string, Workspace>;
-  pool: AgentPool;
-  scheduler: TaskScheduler;
+  constructor() {
+    this.workspaceManager = new WorkspaceManager();
+  }
+
+  /**
+   * 设置任务执行器
+   */
+  setExecutor(executor: TaskExecutor): void {
+    this.workspaceManager.setExecutor(executor);
+  }
+
+  /**
+   * 创建部门
+   */
+  createWorkspace(config: Parameters<WorkspaceManager['create']>[0]) {
+    return this.workspaceManager.create(config);
+  }
+
+  /**
+   * 删除部门
+   */
+  deleteWorkspace(workspaceId: string) {
+    return this.workspaceManager.delete(workspaceId);
+  }
+
+  /**
+   * 获取部门
+   */
+  getWorkspace(workspaceId: string) {
+    return this.workspaceManager.get(workspaceId);
+  }
+
+  /**
+   * 获取所有部门
+   */
+  getWorkspaces() {
+    return this.workspaceManager.getAll();
+  }
+
+  /**
+   * 获取部门的 Agent 管理器
+   */
+  getAgentManager(workspaceId: string) {
+    return this.workspaceManager.getAgentManager(workspaceId);
+  }
+
+  /**
+   * 招聘员工
+   */
+  hireAgent(workspaceId: string, config: Parameters<AgentManager['hire']>[0]) {
+    return this.workspaceManager.hireAgent(workspaceId, config);
+  }
+
+  /**
+   * 解雇员工
+   */
+  fireAgent(workspaceId: string, agentId: string) {
+    return this.workspaceManager.fireAgent(workspaceId, agentId);
+  }
+
+  /**
+   * 分配任务
+   */
+  async assign(workspaceId: string, task: Task, options?: AssignOptions): Promise<Result> {
+    return this.workspaceManager.assign(workspaceId, task, options);
+  }
+
+  /**
+   * 批量分配任务
+   */
+  async assignBatch(workspaceId: string, tasks: Task[], options?: AssignOptions): Promise<Result[]> {
+    return this.workspaceManager.assignBatch(workspaceId, tasks, options);
+  }
+
+  /**
+   * 获取部门统计
+   */
+  getStats(workspaceId: string) {
+    return this.workspaceManager.getStats(workspaceId);
+  }
+
+  /**
+   * 导出所有配置
+   */
+  export() {
+    const workspaces = this.workspaceManager.getAll();
+    return workspaces.map(w => this.workspaceManager.export(w.id)).filter(Boolean);
+  }
+
+  /**
+   * 导入配置
+   */
+  import(configs: { workspace: any; agents: any[] }[]) {
+    configs.forEach(c => {
+      this.workspaceManager.import(c);
+    });
+  }
 }
 
 /**
- * Mission Control - Main Class
+ * 创建 Mission Control 实例
  */
-export class MissionControl {
-  private pool: AgentPool;
-  private scheduler: TaskScheduler;
-  private workspaces: Map<string, Workspace> = new Map();
-
-  constructor() {
-    this.pool = new AgentPool();
-    this.scheduler = new TaskScheduler();
-    
-    // Register common templates
-    for (const template of COMMON_TEMPLATES) {
-      this.scheduler.registerTemplate(template);
-    }
-  }
-
-  /**
-   * Create workspace
-   */
-  createWorkspace(name: string, path: string, config?: Partial<WorkspaceConfig>): Workspace {
-    const workspace: Workspace = {
-      id: `ws_${Date.now()}`,
-      name,
-      path,
-      agents: [],
-      config: {
-        maxAgents: 10,
-        defaultSkills: [],
-        notifyOnFail: true,
-        autoScale: false,
-        ...config,
-      },
-    };
-
-    this.workspaces.set(name, workspace);
-    return workspace;
-  }
-
-  /**
-   * Get workspace
-   */
-  getWorkspace(name: string): Workspace | undefined {
-    return this.workspaces.get(name);
-  }
-
-  /**
-   * Hire agent
-   */
-  hire(name: string, type: Agent['type'], skills: string[] = [], workspace?: string): Agent {
-    const config = DEFAULT_AGENT_CONFIGS[type];
-    const agent = this.pool.register(config, name, type, skills);
-
-    if (workspace) {
-      const ws = this.workspaces.get(workspace);
-      if (ws) {
-        ws.agents.push(agent.id);
-      }
-    }
-
-    return agent;
-  }
-
-  /**
-   * Assign task to agent
-   */
-  async assign(agentId: string, task: Task): Promise<boolean> {
-    return this.pool.assign(agentId, task);
-  }
-
-  /**
-   * Assign task to best available agent
-   */
-  async assignBest(task: Task): Promise<boolean> {
-    const agent = this.pool.findBest(task);
-    if (!agent) {
-      this.pool.queueTask(task);
-      return false;
-    }
-
-    return this.pool.assign(agent.id, task);
-  }
-
-  /**
-   * Schedule task
-   */
-  schedule(task: ScheduledTask): void {
-    this.scheduler.schedule(task);
-  }
-
-  /**
-   * Get status
-   */
-  getStatus() {
-    return {
-      pool: this.pool.getStats(),
-      scheduler: this.scheduler.getStats(),
-      workspaces: this.workspaces.size,
-    };
-  }
-
-  /**
-   * Get all agents
-   */
-  getAgents(): Agent[] {
-    return this.pool.getAll();
-  }
-
-  /**
-   * Get scheduled tasks
-   */
-  getScheduledTasks(): ScheduledTask[] {
-    return this.scheduler.getAll();
-  }
-
-  /**
-   * Fire agent
-   */
-  fire(agentId: string): boolean {
-    return this.pool.remove(agentId);
-  }
-
-  /**
-   * Stop all
-   */
-  shutdown(): void {
-    this.scheduler.stopAll();
-  }
+export function createMissionControl(): MissionControl {
+  return new MissionControl();
 }
-
-// Export everything
-export { AgentPool, Agent, Task, DEFAULT_AGENT_CONFIGS } from './agentPool';
-export { TaskScheduler, ScheduledTask, TaskTemplate, COMMON_TEMPLATES } from './taskScheduler';
-export { AgentMemory, MemoryEntry, MemoryQuery } from './memory';
-export { NotificationSystem, Notification, NotificationChannel, notify } from './notification';
-export { Metrics, Metric, TimeSeriesPoint, COMMON_METRICS } from './metrics';
-export { WebhookServer, WebhookHandler, WebhookEvent, WEBHOOK_EVENTS } from './webhook';
-export { WorkflowEngine, Workflow, WorkflowStep, WorkflowExecution, EXAMPLE_WORKFLOWS } from './workflow';
-export { APIServer, APIServerConfig, createAPIServer } from './api';
-export { MissionControl, Workspace, WorkspaceConfig } from './index';
