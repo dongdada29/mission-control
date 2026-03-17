@@ -4,6 +4,9 @@
 
 export { AgentManager } from './agent.js';
 export { WorkspaceManager, type TaskExecutor } from './workspace.js';
+export { PerformanceManager, type PerformanceReport } from './performance.js';
+export { CostManager, type CostRecord, CostBudget, CostReport } from './cost.js';
+export { LoadBalancer, type LoadBalanceStrategy } from './loadbalancer.js';
 export type { 
   Task, 
   Result, 
@@ -15,16 +18,25 @@ export type {
 
 import { AgentManager } from './agent.js';
 import { WorkspaceManager, type TaskExecutor } from './workspace.js';
-import type { Task, Result, AssignOptions } from './types.js';
+import { PerformanceManager } from './performance.js';
+import { CostManager, type CostBudget } from './cost.js';
+import { LoadBalancer, type LoadBalanceStrategy } from './loadbalancer.js';
+import type { Task, Result, AssignOptions, Agent } from './types.js';
 
 /**
  * Mission Control - 主入口
  */
 export class MissionControl {
   private workspaceManager: WorkspaceManager;
+  private performanceManager: PerformanceManager;
+  private costManager: CostManager;
+  private loadBalancer: LoadBalancer;
 
-  constructor() {
+  constructor(config?: { budget?: CostBudget; loadBalanceStrategy?: LoadBalanceStrategy }) {
     this.workspaceManager = new WorkspaceManager();
+    this.performanceManager = new PerformanceManager();
+    this.costManager = new CostManager(config?.budget);
+    this.loadBalancer = new LoadBalancer(config?.loadBalanceStrategy || 'least-tasks');
   }
 
   /**
@@ -32,6 +44,13 @@ export class MissionControl {
    */
   setExecutor(executor: TaskExecutor): void {
     this.workspaceManager.setExecutor(executor);
+  }
+
+  /**
+   * 设置负载均衡策略
+   */
+  setLoadBalanceStrategy(strategy: LoadBalanceStrategy): void {
+    this.loadBalancer.setStrategy(strategy);
   }
 
   /**
@@ -84,9 +103,23 @@ export class MissionControl {
   }
 
   /**
-   * 分配任务
+   * 分配任务 (使用负载均衡)
    */
   async assign(workspaceId: string, task: Task, options?: AssignOptions): Promise<Result> {
+    const manager = this.workspaceManager.getAgentManager(workspaceId);
+    if (!manager) {
+      throw new Error(`Workspace ${workspaceId} not found`);
+    }
+
+    // 如果没有指定 agentId，使用负载均衡选择
+    if (!options?.agentId) {
+      const agents = manager.getAll();
+      const selected = this.loadBalancer.selectAgent(agents, options?.skill);
+      if (selected) {
+        options = { ...options, agentId: selected.id };
+      }
+    }
+
     return this.workspaceManager.assign(workspaceId, task, options);
   }
 
@@ -102,6 +135,73 @@ export class MissionControl {
    */
   getStats(workspaceId: string) {
     return this.workspaceManager.getStats(workspaceId);
+  }
+
+  /**
+   * 生成绩效报告
+   */
+  generatePerformanceReport(workspaceId: string, agentId: string, periodDays?: number) {
+    const manager = this.workspaceManager.getAgentManager(workspaceId);
+    if (!manager) {
+      throw new Error(`Workspace ${workspaceId} not found`);
+    }
+
+    const agent = manager.get(agentId);
+    if (!agent) {
+      throw new Error(`Agent ${agentId} not found`);
+    }
+
+    return this.performanceManager.generateReport(agent, periodDays);
+  }
+
+  /**
+   * 生成团队报告
+   */
+  generateTeamReport(workspaceId: string) {
+    const manager = this.workspaceManager.getAgentManager(workspaceId);
+    if (!manager) {
+      throw new Error(`Workspace ${workspaceId} not found`);
+    }
+
+    return this.performanceManager.generateTeamReport(manager.getAll());
+  }
+
+  /**
+   * 生成成本报告
+   */
+  generateCostReport(periodDays?: number) {
+    return this.costManager.generateReport(periodDays);
+  }
+
+  /**
+   * 检查预算
+   */
+  checkBudget() {
+    return this.costManager.checkBudget();
+  }
+
+  /**
+   * 获取成本优化建议
+   */
+  getCostOptimizations(workspaceId: string) {
+    const manager = this.workspaceManager.getAgentManager(workspaceId);
+    if (!manager) {
+      throw new Error(`Workspace ${workspaceId} not found`);
+    }
+
+    return this.costManager.getOptimizationSuggestions(manager.getAll());
+  }
+
+  /**
+   * 获取负载分布
+   */
+  getLoadDistribution(workspaceId: string) {
+    const manager = this.workspaceManager.getAgentManager(workspaceId);
+    if (!manager) {
+      throw new Error(`Workspace ${workspaceId} not found`);
+    }
+
+    return this.loadBalancer.getLoadDistribution(manager.getAll());
   }
 
   /**
@@ -125,6 +225,6 @@ export class MissionControl {
 /**
  * 创建 Mission Control 实例
  */
-export function createMissionControl(): MissionControl {
-  return new MissionControl();
+export function createMissionControl(config?: ConstructorParameters<typeof MissionControl>[0]): MissionControl {
+  return new MissionControl(config);
 }
